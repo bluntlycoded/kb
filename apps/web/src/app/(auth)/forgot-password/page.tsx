@@ -41,7 +41,16 @@ export default function ForgotPasswordPage() {
           If an account exists for <span className="font-semibold text-fg">{email}</span>, we&apos;ve sent a link to reset your
           password. The link expires in 30 minutes.
         </p>
-        <ButtonLink href="/login" variant="secondary" className="mt-8 w-full">
+        {/* Reset on the way out: Next.js keeps this page alive, so it would reopen on this screen. */}
+        <ButtonLink
+          href="/login"
+          variant="secondary"
+          className="mt-8 w-full"
+          onClick={() => {
+            setSent(false);
+            setEmail("");
+          }}
+        >
           Back to sign in
         </ButtonLink>
         <button type="button" onClick={() => setSent(false)} className="mt-4 cursor-pointer text-sm font-semibold text-brand-text hover:underline">

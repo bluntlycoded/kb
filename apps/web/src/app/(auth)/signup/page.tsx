@@ -88,7 +88,16 @@ export default function SignupPage() {
           to <span className="font-semibold text-fg">{form.email}</span>. Your account manager will be in touch to connect sign-in and
           import your employees.
         </p>
-        <ButtonLink href="/login" size="lg" className="mt-8 w-full">
+        {/* Reset on the way out: Next.js keeps this page alive, so it would reopen on this screen. */}
+        <ButtonLink
+          href="/login"
+          size="lg"
+          className="mt-8 w-full"
+          onClick={() => {
+            setStep(1);
+            setForm({ name: "", email: "", password: "", company: "", industry: "", size: "" });
+          }}
+        >
           Explore the demo workspace
         </ButtonLink>
       </div>

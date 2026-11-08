@@ -61,7 +61,9 @@ export function AppShell({ children }: { children: ReactNode }) {
       <div className="flex min-w-0 flex-1 flex-col">
         <TopBar onOpenNav={() => setDrawerOpen(true)} />
         <main id="main" tabIndex={-1} className="flex-1 px-4 pt-6 pb-16 outline-none sm:px-6 lg:px-10 lg:pt-8">
-          <div className="mx-auto w-full max-w-6xl">{children}</div>
+          <div key={me.id} className="mx-auto w-full max-w-6xl">
+            {children}
+          </div>
         </main>
       </div>
     </div>
@@ -228,7 +230,13 @@ function TopBar({ onOpenNav }: { onOpenNav: () => void }) {
                 <RotateCcw aria-hidden /> Reset demo data
               </MenuItem>
               <MenuDivider />
-              <MenuItem danger onClick={signOut}>
+              <MenuItem
+                danger
+                onClick={() => {
+                  close();
+                  signOut();
+                }}
+              >
                 <LogOut aria-hidden /> Sign out
               </MenuItem>
             </>

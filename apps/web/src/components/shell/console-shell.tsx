@@ -82,7 +82,13 @@ export function ConsoleShell({ children }: { children: ReactNode }) {
                     <RotateCcw aria-hidden /> Reset demo data
                   </MenuItem>
                   <MenuDivider />
-                  <MenuItem danger onClick={signOut}>
+                  <MenuItem
+                    danger
+                    onClick={() => {
+                      close();
+                      signOut();
+                    }}
+                  >
                     <LogOut aria-hidden /> Sign out
                   </MenuItem>
                 </>
@@ -92,7 +98,7 @@ export function ConsoleShell({ children }: { children: ReactNode }) {
         </div>
       </header>
       <main id="main" className="mx-auto max-w-6xl px-4 pt-8 pb-16 sm:px-6">
-        {children}
+        <div key={platformUser.id}>{children}</div>
       </main>
     </div>
   );

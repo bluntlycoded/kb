@@ -41,6 +41,11 @@ export default function LoginPage() {
     setTimeout(() => {
       const result = signIn(address);
       if (result.ok) {
+        // Next.js keeps this page alive in the background after we leave it, so reset
+        // the form now. Otherwise it comes back still "signing in" after sign-out.
+        setLoading(false);
+        setPassword("");
+        setErrors({});
         go(result.home);
         return;
       }
