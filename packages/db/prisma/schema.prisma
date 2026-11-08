@@ -1,0 +1,371 @@
+// Multi-tenant schema.
+// Every tenant-owned table carries tenantId, and every query in the API must
+// filter on it. Plan: add Postgres row-level security as a second guard once
+// auth is in place.
+
+generator client {
+  provider            = "prisma-client"
+  output              = "../src/generated/prisma"
+  moduleFormat        = "esm"
+  importFileExtension = "js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─── Platform layer (above all tenants) ─────────────────────────────────────
+
+enum PlatformRole {
+  CORE_ADMIN // us, the developer company
+  RESELLER_ADMIN // our client, who sells the product
+}
+
+model PlatformUser {
+  id        String       @id @default(cuid())
+  email     String       @unique
+  name      String
+  role      PlatformRole
+  createdAt DateTime     @default(now())
+}
+
+model Plan {
+  id        String   @id @default(cuid())
+  code      String   @unique // "basic", "pro", ...
+  name      String
+  features  String[] // values of Feature in @platform/shared
+  tenants   Tenant[]
+  createdAt DateTime @default(now())
+}
+
+enum TenantStatus {
+  TRIAL
+  ACTIVE
+  SUSPENDED
+}
+
+/// A customer company.
+model Tenant {
+  id         String       @id @default(cuid())
+  name       String
+  slug       String       @unique // subdomain: <slug>.product.com
+  sector     String // industry, drives the sector news feed
+  status     TenantStatus @default(TRIAL)
+  planId     String
+  plan       Plan         @relation(fields: [planId], references: [id])
+  logoUrl    String?
+  brandColor String?
+  createdAt  DateTime     @default(now())
+
+  offices       Office[]
+  teams         Team[]
+  users         User[]
+  skills        Skill[]
+  praises       Praise[]
+  pointsEntries PointsEntry[]
+  conversations Conversation[]
+  messages      Message[]
+  quizzes       Quiz[]
+  gameSessions  GameSession[]
+  auditLogs     AuditLog[]
+}
+
+// ─── People ─────────────────────────────────────────────────────────────────
+
+enum TenantRole {
+  EMPLOYEE
+  MANAGER
+  HR
+  COMPANY_ADMIN
+}
+
+/// Office location; its region drives the local news feed.
+model Office {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name     String
+  city     String
+  region   String
+  country  String
+  users    User[]
+
+  @@index([tenantId])
+}
+
+model Team {
+  id        String  @id @default(cuid())
+  tenantId  String
+  tenant    Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name      String
+  managerId String?
+  manager   User?   @relation("TeamManager", fields: [managerId], references: [id], onDelete: SetNull)
+  members   User[]  @relation("TeamMembers")
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+}
+
+model User {
+  id            String     @id @default(cuid())
+  tenantId      String
+  tenant        Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  email         String
+  name          String
+  role          TenantRole @default(EMPLOYEE)
+  jobTitle      String?
+  department    String?
+  employeeCode  String?
+  joinedAt      DateTime?
+  avatarUrl     String?
+  bio           String?
+  officeId      String?
+  office        Office?    @relation(fields: [officeId], references: [id], onDelete: SetNull)
+  teamId        String?
+  team          Team?      @relation("TeamMembers", fields: [teamId], references: [id], onDelete: SetNull)
+  /// Cached sum of PointsEntry.delta; the ledger is the source of truth.
+  pointsBalance Int        @default(0)
+  createdAt     DateTime   @default(now())
+
+  managedTeams        Team[]               @relation("TeamManager")
+  skills              UserSkill[]
+  praisesGiven        Praise[]             @relation("PraiseAuthor")
+  praisesReceived     Praise[]             @relation("PraiseRecipient")
+  pointsEntries       PointsEntry[]
+  conversationMembers ConversationMember[]
+  messages            Message[]
+  quizzesCreated      Quiz[]
+  hostedGames         GameSession[]
+  gamePlayers         GameSessionPlayer[]
+  auditLogs           AuditLog[]
+
+  @@unique([tenantId, email])
+  @@index([tenantId, teamId])
+}
+
+model Skill {
+  id       String      @id @default(cuid())
+  tenantId String
+  tenant   Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name     String
+  users    UserSkill[]
+
+  @@unique([tenantId, name])
+}
+
+model UserSkill {
+  userId  String
+  user    User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  skillId String
+  skill   Skill  @relation(fields: [skillId], references: [id], onDelete: Cascade)
+  level   Int? // 1-5, self-rated
+
+  @@id([userId, skillId])
+}
+
+// ─── Cohort: praise, achievements, points ───────────────────────────────────
+
+enum PraiseKind {
+  PRAISE
+  ACHIEVEMENT
+}
+
+model Praise {
+  id          String     @id @default(cuid())
+  tenantId    String
+  tenant      Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  kind        PraiseKind @default(PRAISE)
+  authorId    String
+  author      User       @relation("PraiseAuthor", fields: [authorId], references: [id], onDelete: Cascade)
+  recipientId String
+  recipient   User       @relation("PraiseRecipient", fields: [recipientId], references: [id], onDelete: Cascade)
+  message     String
+  points      Int        @default(0)
+  createdAt   DateTime   @default(now())
+
+  @@index([tenantId, createdAt])
+}
+
+enum PointsReason {
+  PRAISE_RECEIVED
+  GAME_RESULT
+  QUIZ_RESULT
+  MANUAL_ADJUSTMENT
+  REDEMPTION
+}
+
+/// Append-only ledger. Never update or delete rows; add a correcting entry.
+model PointsEntry {
+  id        String       @id @default(cuid())
+  tenantId  String
+  tenant    Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  delta     Int
+  reason    PointsReason
+  refId     String? // praise / game session / quiz id
+  createdAt DateTime     @default(now())
+
+  @@index([tenantId, userId, createdAt])
+}
+
+// ─── News (shared cache, not tenant-owned) ──────────────────────────────────
+
+enum NewsCategory {
+  LOCAL
+  SECTOR
+}
+
+model NewsArticle {
+  id          String       @id @default(cuid())
+  category    NewsCategory
+  region      String? // set for LOCAL
+  sector      String? // set for SECTOR
+  title       String
+  summary     String?
+  url         String       @unique
+  source      String
+  imageUrl    String?
+  publishedAt DateTime
+  fetchedAt   DateTime     @default(now())
+
+  @@index([category, region, publishedAt])
+  @@index([category, sector, publishedAt])
+}
+
+// ─── Chat ───────────────────────────────────────────────────────────────────
+
+enum ConversationType {
+  DIRECT
+  GROUP
+}
+
+model Conversation {
+  id          String               @id @default(cuid())
+  tenantId    String
+  tenant      Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  type        ConversationType
+  name        String? // groups only
+  createdById String
+  createdAt   DateTime             @default(now())
+  members     ConversationMember[]
+  messages    Message[]
+
+  @@index([tenantId])
+}
+
+model ConversationMember {
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  userId         String
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  isOwner        Boolean      @default(false)
+  lastReadAt     DateTime?
+  joinedAt       DateTime     @default(now())
+
+  @@id([conversationId, userId])
+  @@index([userId])
+}
+
+model Message {
+  id             String       @id @default(cuid())
+  tenantId       String
+  tenant         Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  senderId       String
+  sender         User         @relation(fields: [senderId], references: [id], onDelete: Cascade)
+  body           String
+  createdAt      DateTime     @default(now())
+  editedAt       DateTime?
+  deletedAt      DateTime?
+
+  @@index([conversationId, createdAt])
+}
+
+// ─── Games & quizzes ────────────────────────────────────────────────────────
+
+model Quiz {
+  id               String         @id @default(cuid())
+  tenantId         String
+  tenant           Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  title            String
+  createdById      String
+  createdBy        User           @relation(fields: [createdById], references: [id], onDelete: Cascade)
+  pointsPerCorrect Int            @default(0)
+  createdAt        DateTime       @default(now())
+  questions        QuizQuestion[]
+  sessions         GameSession[]
+
+  @@index([tenantId])
+}
+
+model QuizQuestion {
+  id           String   @id @default(cuid())
+  quizId       String
+  quiz         Quiz     @relation(fields: [quizId], references: [id], onDelete: Cascade)
+  position     Int
+  prompt       String
+  options      String[]
+  correctIndex Int
+
+  @@unique([quizId, position])
+}
+
+enum GameSessionStatus {
+  INVITING
+  ACTIVE
+  FINISHED
+  CANCELLED
+}
+
+/// One play-through. gameKey names a game in the code catalogue ("quiz", ...).
+model GameSession {
+  id        String              @id @default(cuid())
+  tenantId  String
+  tenant    Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  gameKey   String
+  quizId    String?
+  quiz      Quiz?               @relation(fields: [quizId], references: [id], onDelete: SetNull)
+  hostId    String
+  host      User                @relation(fields: [hostId], references: [id], onDelete: Cascade)
+  status    GameSessionStatus   @default(INVITING)
+  createdAt DateTime            @default(now())
+  endedAt   DateTime?
+  players   GameSessionPlayer[]
+
+  @@index([tenantId, status])
+}
+
+enum InviteStatus {
+  INVITED
+  ACCEPTED
+  DECLINED
+}
+
+model GameSessionPlayer {
+  sessionId String
+  session   GameSession  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status    InviteStatus @default(INVITED)
+  score     Int          @default(0)
+
+  @@id([sessionId, userId])
+}
+
+// ─── Audit (what the company admin "monitors") ──────────────────────────────
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  actorId   String?
+  actor     User?    @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  action    String // e.g. "team.member_moved", "points.adjusted"
+  target    String?
+  meta      Json?
+  createdAt DateTime @default(now())
+
+  @@index([tenantId, createdAt])
+}
